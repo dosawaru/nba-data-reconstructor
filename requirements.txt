@@ -1,11 +1,11 @@
-nba-api==1.4.0
-requests==2.31.0
+nba-api==1.11.4
+requests==2.32.4
 requests-cache==1.2.0
 
 psycopg2-binary==2.9.9
 
-numpy==1.26.0
-pandas==2.2.0
-scikit-learn==1.4.0
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.6.1
 
-python-dotenv==1.0.1
+python-dotenv==1.1.1
