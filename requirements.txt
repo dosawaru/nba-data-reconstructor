@@ -1,8 +1,8 @@
 nba-api==1.11.4
 requests==2.32.4
 requests-cache==1.2.0
-
 psycopg2-binary==2.9.9
+SQLAlchemy==2.0.29
 
 numpy==1.26.4
 pandas==2.2.2
