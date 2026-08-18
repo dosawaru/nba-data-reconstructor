@@ -4,8 +4,8 @@ import logging
 import requests
 import requests_cache
 
-# caching protocol for the NBA PHP API to intercept redundant calls and reduce API usage, expire after -1 means never expire
-requests_cache.install_cache("nba_php_cache", backend="sqlite", expire_after= -1)
+# caching protocol for the NBA PBP API to intercept redundant calls and reduce API usage, expire after -1 means never expire
+requests_cache.install_cache("nba_pbp_cache", backend="sqlite", expire_after= -1)
 
 # logging configuration
 logging.basicConfig(level= logging.INFO, format= "%(asctime)s - %(levelname)s - %(message)s")
@@ -17,10 +17,10 @@ class NBAPlayByPlayIngestor:
     """
 
     def __init__(self):
-        self.base_url = "https://stats.nba.com/stats/playbyplayv2"
+        self.base_url = "https://stats.nba.com/stats/playbyplayv3"
         self.headers = {
             "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
@@ -105,8 +105,6 @@ class NBAPlayByPlayIngestor:
 
 if __name__ == "__main__":
     ingestor = NBAPlayByPlayIngestor()
-    payload = ingestor.fetch_game_events("0022200001")  # 0022200001 is the opening game of the 2022-2023 NBA Season
-    result_sets = payload.get("resultSets", [])
-    if result_sets:
-        row_count = len(result_sets[0].get("rowSet", []))
-        print(f"Ingestion verified! Retrieved {row_count} raw play-by-play events.")
+    payload = ingestor.fetch_game_events("0022400001")  # 2024-2025 season opener
+    actions = (payload.get("game") or {}).get("actions", [])
+    print(f"Ingestion verified! Retrieved {len(actions)} raw play-by-play events.")
