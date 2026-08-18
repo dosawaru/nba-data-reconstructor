@@ -14,13 +14,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # max_overflow: maximum number of connections to allow beyond the pool size
 engine = create_engine(
     DATABASE_URL,
-    pool_size= 10
+    pool_size= 10,
     max_overflow= 10,
     echo= True
 )
 
 # create session
-Session = sessionmaker(bind= engine, autocommit= False, autoflush= False)
+SessionLocal = sessionmaker(bind= engine, autocommit= False, autoflush= False)
+Session = SessionLocal
 
 # create base class for all models for them to inherit from and be able to use the session
 Base = declarative_base()
