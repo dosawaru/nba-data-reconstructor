@@ -84,9 +84,14 @@ class NBAPlayByPlayParser:
             "visitordescription": description if location == "v" else None,
             "score": self._format_score(score_home, score_away),
             "scoremargin": self._format_margin(score_home, score_away),
-            "player1_id": self._nullable_player_id(action.get("personId")),
+            "player1_id": self._nullable_player_id(
+                action.get("personId") 
+            ),
             "player2_id": self._nullable_player_id(
-                action.get("assistPersonId") or action.get("stealPersonId")
+                action.get("assistPersonId") or 
+                action.get("stealPersonId") or 
+                action.get("subPersonId") or       
+                action.get("replacedPersonId")     
             ),
             "player3_id": self._nullable_player_id(
                 action.get("blockPersonId") or action.get("foulDrawnPersonId")
