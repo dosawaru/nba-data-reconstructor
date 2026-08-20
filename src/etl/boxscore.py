@@ -4,7 +4,6 @@ import random
 from typing import List, Dict, Tuple
 from nba_api.stats.endpoints import boxscoretraditionalv3
 from requests.exceptions import ReadTimeout, ConnectionError
-from src.etl.playername import PlayerNameResolver
 
 # logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -15,7 +14,7 @@ class BoxscoreIngestor:
     """
 
     def __init__(self):
-        self.player_name_resolver = PlayerNameResolver()
+        pass
 
     def get_starting_lineups(self, game_id: str, max_retries: int = 3) -> Tuple[List[int], List[int]]:        
         """
@@ -48,10 +47,7 @@ class BoxscoreIngestor:
                     if player.get("position") and player.get("position").strip() != ""
                 ]
 
-                home_names = self.player_name_resolver.resolve_lineup(home_starters)
-                away_names = self.player_name_resolver.resolve_lineup(away_starters)
-
-                return home_starters, away_starters, home_names, away_names
+                return home_starters, away_starters
             except (ReadTimeout, ConnectionError, ValueError) as e:
                 jitter = random.uniform(0.5, 1.5)
                 wait_time = backoff_factor ** retries + jitter
@@ -65,8 +61,6 @@ class BoxscoreIngestor:
 
 if __name__ == "__main__":
     ingestor = BoxscoreIngestor()
-    home_starters, away_starters, home_names, away_names = ingestor.get_starting_lineups("0022400002")
-    # print(f"Home starters: {home_starters}")
-    # print(f"Away starters: {away_starters}")
-    print(f"Home names: {home_names}")
-    print(f"Away names: {away_names}")
+    home_starters, away_starters = ingestor.get_starting_lineups("0022400002")
+    print(f"Home starters: {home_starters}")
+    print(f"Away starters: {away_starters}")
