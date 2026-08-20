@@ -56,4 +56,4 @@ class NBAPlayByPlayPipeline:
 
 if __name__ == "__main__":
     orchestrator = NBAPlayByPlayPipeline()
-    orchestrator.process_game("0022400001") # Test execution on the 2024-2025 season opener
+    orchestrator.process_game("0022400002") # Test execution on the 2024-2025 season opener
