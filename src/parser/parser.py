@@ -1,31 +1,14 @@
 import logging
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
+from src.parser.event_type import EVENTMSGTYPE_BY_ACTION
 
 # logging configuration
 logging.basicConfig(level= logging.INFO, format= "%(asctime)s - %(levelname)s - %(message)s")
 
-# mapping of action types to event message types
-EVENTMSGTYPE_BY_ACTION = {
-    "made shot": 1,
-    "missed shot": 2,
-    "free throw": 3,
-    "freethrow": 3,
-    "rebound": 4,
-    "turnover": 5,
-    "foul": 6,
-    "violation": 7,
-    "substitution": 8,
-    "timeout": 9,
-    "jump ball": 10,
-    "jumpball": 10,
-    "ejection": 11,
-    "instant replay": 18,
-    "stoppage": 20,
-}
-
 CLOCK_PATTERN = re.compile(r"PT(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?")
-
+SUB_INCOMING_PATTERN = re.compile(r"SUB:\s+(.+?)\s+FOR")
 
 class NBAPlayByPlayParser:
     """
@@ -38,40 +21,64 @@ class NBAPlayByPlayParser:
         """
 
         try:
-            actions = self._extract_actions(raw_payload)
-            if actions is None:
-                logging.warning(
-                    f"Payload for game {game_id} missing game actions. Keys present: {list(raw_payload.keys())}"
-                )
-                return []
-
-            parsed_events = [self._structured_event(action, game_id) for action in actions]
-
-            if not parsed_events:
+            actions = (raw_payload.get("game") or {}).get("actions", [])  
+            if not actions:
                 logging.warning(f"No play-by-play events parsed for game {game_id}")
                 return []
 
+            # compile the roster matrix
+            roster_map = self._compile_roster_matrix(actions)
+
+            # transform chronological events
+            parsed_events = [self._structured_event(a, game_id, roster_map) for a in actions]
+
             logging.info(f"Parsed {len(parsed_events)} events for game {game_id}")
             return parsed_events
-
+        
         except Exception as e:
             logging.error(f"Error parsing play-by-play data for game {game_id}: {e}")
             raise
 
-    # extract the actions from the payload
-    def _extract_actions(self, raw_payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-        game = raw_payload.get("game")
-        if isinstance(game, dict) and "actions" in game:
-            return game.get("actions") or []
-        return None
+    # normalize the name
+    def normalize_name(self, name: str) -> str:
+        if not name:
+            return ""
+        nfkd_form = unicodedata.normalize("NFKD", name)
+        normalized = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+        return normalized.strip().lower()
 
-    # structure the event
-    def _structured_event(self, action: Dict[str, Any], game_id: str) -> Dict[str, Any]:
+    # generate lookup matrix from the event stream. 
+    def _compile_roster_matrix(self, actions: List[Dict[str, Any]]) -> Dict[str, int]:
+        roster_map = {}
+        for action in actions:
+            pid = action.get("personId")
+            name = action.get("playerName")
+            if pid and name and int(pid) > 0:
+                roster_map[self.normalize_name(name)] = int(pid)
+        return roster_map
+
+    # structure the event into a dictionary 
+    def _structured_event(self, action: Dict[str, Any], game_id: str, roster_map: Dict[str, int]) -> Dict[str, Any]:
         location = (action.get("location") or "").lower()
         description = action.get("description") or None
         score_home = action.get("scoreHome")
         score_away = action.get("scoreAway")
 
+        eventmsgtype = self._eventmsgtype(action)
+
+        # Node Mapping
+        player1_id = self._nullable_player_id(action.get("personId"))
+        player2_id = None
+        player3_id = None
+
+        # Substitution Event
+        if eventmsgtype == 8: 
+            player2_id = self._resolve_incoming_node(description, roster_map)
+        else:
+            player2_id = self._nullable_player_id(action.get("assistPersonId") or action.get("stealPersonId"))
+            player3_id = self._nullable_player_id(action.get("blockPersonId") or action.get("foulDrawnPersonId"))
+
+        # Return the structured event
         return {
             "game_id": str(action.get("gameId") or game_id),
             "eventnum": int(action.get("actionNumber") or 0),
@@ -84,19 +91,29 @@ class NBAPlayByPlayParser:
             "visitordescription": description if location == "v" else None,
             "score": self._format_score(score_home, score_away),
             "scoremargin": self._format_margin(score_home, score_away),
-            "player1_id": self._nullable_player_id(
-                action.get("personId") 
-            ),
-            "player2_id": self._nullable_player_id(
-                action.get("assistPersonId") or 
-                action.get("stealPersonId") or 
-                action.get("subPersonId") or       
-                action.get("replacedPersonId")     
-            ),
-            "player3_id": self._nullable_player_id(
-                action.get("blockPersonId") or action.get("foulDrawnPersonId")
-            ),
+            "player1_id": player1_id,
+            "player2_id": player2_id,
+            "player3_id": player3_id,
         }
+
+    # determine the incoming player ID from the description
+    def _resolve_incoming_node(self, description: str, roster_map: Dict[str, int]) -> Optional[int]:
+        match = SUB_INCOMING_PATTERN.search(description)
+        if match:
+            raw_name = match.group(1)
+            normalized_name = self.normalize_name(raw_name)
+            
+            # Lookup the player ID from the roster map
+            if normalized_name in roster_map:
+                return roster_map[normalized_name]
+            
+            # Fallback iteration for partial matches
+            for dict_name, pid in roster_map.items():
+                if normalized_name in dict_name or dict_name in normalized_name:
+                    return pid
+                    
+            logging.warning(f"Node Resolution Failure: Could not map incoming target '{raw_name}' to integer ID.")
+        return None
 
     # determine the event message type
     def _eventmsgtype(self, action: Dict[str, Any]) -> int:
