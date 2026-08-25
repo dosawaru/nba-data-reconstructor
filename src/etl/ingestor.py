@@ -106,5 +106,14 @@ class NBAPlayByPlayIngestor:
 if __name__ == "__main__":
     ingestor = NBAPlayByPlayIngestor()
     payload = ingestor.fetch_game_events("0022400001")  # 2024-2025 season opener
+    print("--------------------------------")
+    print(payload.get("game"))
+    print("--------------------------------")
+    print(payload.get("game").get("actions"))
+    print("--------------------------------")
+    print(payload.get("game").get("actions")[0])
+    print("--------------------------------")
+    print(payload.get("game").get("actions")[0].get("event"))
+    print("--------------------------------")
     actions = (payload.get("game") or {}).get("actions", [])
     print(f"Ingestion verified! Retrieved {len(actions)} raw play-by-play events.")
