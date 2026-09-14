@@ -1,5 +1,4 @@
 import logging
-from math import exp
 from sqlalchemy.orm import Session
 from src.etl.ingestor import NBAPlayByPlayIngestor
 from src.parser.parser import NBAPlayByPlayParser
@@ -36,10 +35,17 @@ class NBAPlayByPlayPipeline:
             if not parsed_events:
                 logging.error(f"No events parsed for game {game_id}")
                 return
-            
-            # load the data into the database
-            event_objects = [PlayByPlayEvent(**event) for event in parsed_events]
 
+            # replace any prior ingest of this game to avoid double-counting
+            deleted = (
+                db.query(PlayByPlayEvent)
+                .filter(PlayByPlayEvent.game_id == game_id)
+                .delete(synchronize_session=False)
+            )
+            if deleted:
+                logging.info(f"Removed {deleted} existing events for game {game_id}")
+
+            event_objects = [PlayByPlayEvent(**event) for event in parsed_events]
             db.bulk_save_objects(event_objects)
             db.commit()
 

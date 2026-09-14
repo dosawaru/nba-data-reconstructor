@@ -13,8 +13,10 @@ CREATE TABLE IF NOT EXISTS play_by_play_events (
     scoremargin VARCHAR(10),
     player1_id INTEGER,
     player2_id INTEGER,
-    player3_id INTEGER
+    player3_id INTEGER,
+    CONSTRAINT uq_play_by_play_game_eventnum UNIQUE (game_id, eventnum)
 );
 
 CREATE INDEX IF NOT EXISTS ix_play_by_play_events_game_id ON play_by_play_events (game_id);
 CREATE INDEX IF NOT EXISTS ix_play_by_play_events_eventmsgtype ON play_by_play_events (eventmsgtype);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_play_by_play_game_eventnum ON play_by_play_events (game_id, eventnum);

@@ -9,5 +9,8 @@ class PlayerNameResolver:
         self._id_to_name: Dict[int, str] = {p["id"]: p["full_name"] for p in all_players}
 
     def resolve_lineup(self, player_ids: List[int]) -> List[str]:
-        """Maps a list of integer IDs to formatted player names."""
-        return [self._id_to_name.get(pid, f"Unknown ({pid})") for pid in player_ids]
+        """Maps a list of integer IDs to 'Full Name (id)' strings."""
+        return [
+            f"{self._id_to_name.get(pid, 'Unknown')} ({pid})"
+            for pid in player_ids
+        ]
