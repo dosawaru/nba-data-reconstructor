@@ -31,6 +31,7 @@ class NBAPlayByPlayParser:
 
             # transform chronological events
             parsed_events = [self._structured_event(a, game_id, roster_map) for a in actions]
+            parsed_events = self._merge_shared_eventnums(parsed_events)
 
             logging.info(f"Parsed {len(parsed_events)} events for game {game_id}")
             return parsed_events
@@ -95,6 +96,39 @@ class NBAPlayByPlayParser:
             "player2_id": player2_id,
             "player3_id": player3_id,
         }
+
+    def _merge_shared_eventnums(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """ Used to merge shared event numbers """
+        merged: Dict[int, Dict[str, Any]] = {}
+        order: List[int] = []
+
+        for event in events:
+            key = event["eventnum"]
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = event
+                order.append(key)
+                continue
+
+            for field in (
+                "homedescription",
+                "visitordescription",
+                "neutraldescription",
+                "score",
+                "scoremargin",
+            ):
+                if not existing.get(field) and event.get(field):
+                    existing[field] = event[field]
+
+            if not existing.get("eventmsgtype") and event.get("eventmsgtype"):
+                existing["eventmsgtype"] = event["eventmsgtype"]
+
+            if not existing.get("player2_id") and event.get("player1_id"):
+                existing["player2_id"] = event["player1_id"]
+            elif not existing.get("player3_id") and event.get("player1_id"):
+                existing["player3_id"] = event["player1_id"]
+
+        return [merged[key] for key in order]
 
     # determine the incoming player ID from the description
     def _resolve_incoming_node(self, description: str, roster_map: Dict[str, int]) -> Optional[int]:

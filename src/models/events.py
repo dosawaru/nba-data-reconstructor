@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import Column, Integer, String, Text, UniqueConstraint
 from config.database import Base
 
 class PlayByPlayEvent(Base):
@@ -7,6 +7,9 @@ class PlayByPlayEvent(Base):
     """
 
     __tablename__ = "play_by_play_events"
+    __table_args__ = (
+        UniqueConstraint("game_id", "eventnum", name="uq_play_by_play_game_eventnum"),
+    )
 
     event_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     game_id = Column(String(12), nullable=False, index=True)
