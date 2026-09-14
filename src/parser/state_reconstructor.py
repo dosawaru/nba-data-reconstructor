@@ -57,9 +57,16 @@ class DeterministicStateReconstructor:
         player_id = event.get("player1_id")
         if not _is_player_id(player_id):
             return
-        if event.get("homedescription") and len(self._home_seen) < 5:
+
+        home_desc = event.get("homedescription")
+        away_desc = event.get("visitordescription")
+
+        if home_desc and away_desc:
+            return
+
+        if home_desc and player_id not in self._away_seen and len(self._home_seen) < 5:
             self._home_seen.add(player_id)
-        elif event.get("visitordescription") and len(self._away_seen) < 5:
+        elif away_desc and player_id not in self._home_seen and len(self._away_seen) < 5:
             self._away_seen.add(player_id)
 
     def _sub_team(self, event: Dict[str, Any], out_id: int, in_id: int) -> Optional[str]:
@@ -233,6 +240,10 @@ class DeterministicStateReconstructor:
                         annotated_events.extend(self._flush_warmup_buffer())
                     else:
                         annotated_events.extend(self._abandon_period_warmup())
+                if int(event.get("period") or 0) == 1:
+                    annotated_events.append(self._snapshot(event))
+                    i += 1
+                    continue
                 self._begin_period_warmup()
                 self._warmup_buffer.append(event)
                 i += 1
@@ -240,13 +251,11 @@ class DeterministicStateReconstructor:
 
             if self._period_warmup:
                 # Substitutions before both fives are known mean appearance-based
-                # discovery would mix pre/post-sub players. Keep prior lineups.
                 if event.get("eventmsgtype") == 8:
                     if len(self._home_seen) == 5 and len(self._away_seen) == 5:
                         annotated_events.extend(self._flush_warmup_buffer())
                     else:
                         annotated_events.extend(self._abandon_period_warmup())
-                    # Re-process this substitution in normal mode.
                     continue
 
                 self._observe_players(event)
