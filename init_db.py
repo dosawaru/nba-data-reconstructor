@@ -2,6 +2,7 @@ import logging
 from sqlalchemy import text
 from config.database import engine, Base
 from src.models.events import PlayByPlayEvent
+from src.models.stints import PbpStint
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
