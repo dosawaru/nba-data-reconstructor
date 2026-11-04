@@ -32,11 +32,15 @@ class EvaluationReport:
     within_5_points_pct: float
 
 def _lineup_key(ids) -> str:
-    """Canonical key matching to bypass array/string PostgreSQL formatting."""
+    """Canonical sorted key shared by CSV export, priors, and DB JSONB lists."""
     if isinstance(ids, str):
-        return ids
+        cleaned = ids.strip().strip("[]")
+        if not cleaned:
+            return ""
+        parts = [int(x.strip()) for x in cleaned.split(",") if x.strip()]
+        return ",".join(str(x) for x in sorted(parts))
     try:
-        return ",".join(str(int(x)) for x in ids)
+        return ",".join(str(int(x)) for x in sorted(ids))
     except TypeError:
         return str(ids)
 
@@ -138,7 +142,7 @@ class PredictiveEvaluator:
 
 if __name__ == "__main__":
     PRIORS_FILE = Path("models/weights/bayesian_shrinkage_priors.joblib")
-    HOLDOUT_SEASON = "2024-25"
+    HOLDOUT_SEASON = "2025-26"
 
     if not DB_URL:
         raise RuntimeError("DATABASE_URL is not set in environment.")
