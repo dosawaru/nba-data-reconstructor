@@ -62,7 +62,7 @@ class BaselineRandomForest:
         logger.info(f"Exported model to {model_path}")
 
 if __name__ == "__main__":
-    TARGET_SEASON = "2024-25"
+    TARGET_SEASON = "2025-26"
     ARTIFACT_DIR = Path("data/processed")
     MODEL_DIR = Path("models/weights")
 

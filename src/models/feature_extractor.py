@@ -12,6 +12,8 @@ from sqlalchemy.engine import Engine
 from dotenv import load_dotenv
 import os
 
+from src.etl.player_baselines import load_player_baselines
+
 load_dotenv()
 
 # logging
@@ -21,9 +23,13 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class FeatureConfig:
     league_avg_drtg: float = 114.5
+    league_avg_ortg: float = 114.5
     league_avg_pace: float = 98.0
     seconds_per_game: float = 48 * 60
     min_stint_seconds: float = 15.0
+    min_stint_possessions: float = 2.0
+    pace_min: float = 60.0
+    pace_max: float = 140.0
 
 class StintFeatureExtractor:
     """
@@ -35,8 +41,15 @@ class StintFeatureExtractor:
         self.config: FeatureConfig = config or FeatureConfig()
 
     def load_player_season_baselines(self, season: str) -> Dict[int, Dict[str, float]]:
-        logger.info("Using league-average fallbacks for player baselines (season %s)", season)
-        return {}
+        baselines = load_player_baselines(season)
+        if not baselines:
+            logger.warning(
+                "No player baselines for season %s; using league-average feature fallbacks",
+                season,
+            )
+        else:
+            logger.info("Loaded %d player baselines for season %s", len(baselines), season)
+        return baselines
 
     def load_stint_data(self, season: str) -> pd.DataFrame:
         """
@@ -58,22 +71,31 @@ class StintFeatureExtractor:
             FROM pbp_stints
             WHERE season = %(season)s
               AND duration_seconds >= %(min_duration)s
+              AND possessions >= %(min_possessions)s
               AND garbage_time_flag = FALSE
         """
         logger.info(f"Extracting stint data for season {season}")
         return pd.read_sql(
             query,
             self.engine,
-            params={"season": season, "min_duration": self.config.min_stint_seconds},
+            params={
+                "season": season,
+                "min_duration": self.config.min_stint_seconds,
+                "min_possessions": self.config.min_stint_possessions,
+            },
         )
 
     def compute_pace_factor(self, possessions: np.array, duration_seconds: np.array) -> np.array:
         """
-        Compute the pace factor for a given stint
+        Compute the pace factor for a given stint, clipped to a sane band.
         """
-        safe_duration = np.where(duration_seconds <= 0, np.nan, duration_seconds)
-        pace = (possessions / safe_duration) * self.config.seconds_per_game
-        return np.nan_to_num(pace, nan=self.config.league_avg_pace)
+        poss = np.asarray(possessions, dtype=np.float64)
+        dur = np.asarray(duration_seconds, dtype=np.float64)
+        invalid = (dur <= 0) | (poss < 0)
+        safe_duration = np.where(invalid, np.nan, dur)
+        pace = (poss / safe_duration) * self.config.seconds_per_game
+        pace = np.nan_to_num(pace, nan=self.config.league_avg_pace)
+        return np.clip(pace, self.config.pace_min, self.config.pace_max)
 
     def compute_environment_usage_delta(self, active_lineup: List[int], team_id: int, player_baseline: Dict[int, Dict[str, float]]) -> float:
         """
@@ -86,7 +108,7 @@ class StintFeatureExtractor:
         """
         Vectorizes stint records into mathematical feature matrix X and target y.
 
-        Feature Vector: [DRTG_opp, Stint_Pace, Delta_USG_on_off]
+        Feature Vector: [DRTG_opp, Stint_Pace, Delta_USG_on_off, ORtg_lineup, Net_lineup, is_home]
         Target: Lineup Net Rating per 100 possessions.
         """
 
@@ -121,6 +143,18 @@ class StintFeatureExtractor:
             )
         )
 
+        stints_df["ortg_lineup"] = stints_df["lineup_player_ids"].apply(
+            lambda ids: np.mean(
+                [baselines.get(player_id, {}).get("ortg", self.config.league_avg_ortg) for player_id in ids]
+            )
+        )
+        stints_df["net_lineup"] = stints_df["lineup_player_ids"].apply(
+            lambda ids: np.mean(
+                [baselines.get(player_id, {}).get("net", 0.0) for player_id in ids]
+            )
+        )
+        stints_df["is_home"] = stints_df["stint_id"].astype(str).str.endswith("_h").astype(np.float64)
+
         # Compute Target: Lineup Net Rating per 100 possessions
         safe_possessions = np.where(stints_df["possessions"] == 0, 1.0, stints_df["possessions"])
         stints_df["net_rating"] = (
@@ -128,7 +162,14 @@ class StintFeatureExtractor:
         ) * 100.0
 
         # Create feature matrix X and target vector y
-        feature_columns = ["drtg_opp", "pace_factor", "delta_usg_on_off"]
+        feature_columns = [
+            "drtg_opp",
+            "pace_factor",
+            "delta_usg_on_off",
+            "ortg_lineup",
+            "net_lineup",
+            "is_home",
+        ]
         X = stints_df[feature_columns].to_numpy(dtype=np.float64)
         y = stints_df["net_rating"].to_numpy(dtype=np.float64)
 
@@ -152,6 +193,9 @@ class StintFeatureExtractor:
                 drtg_opp=("drtg_opp", "mean"),
                 pace_factor=("pace_factor", "mean"),
                 delta_usg_on_off=("delta_usg_on_off", "mean"),
+                ortg_lineup=("ortg_lineup", "mean"),
+                net_lineup=("net_lineup", "mean"),
+                is_home=("is_home", "mean"),
             )
         )
         safe_poss = grouped["total_possessions"].clip(lower=1.0)
@@ -166,6 +210,9 @@ class StintFeatureExtractor:
                 "drtg_opp",
                 "pace_factor",
                 "delta_usg_on_off",
+                "ortg_lineup",
+                "net_lineup",
+                "is_home",
             ]
         ]
 
