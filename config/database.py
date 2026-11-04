@@ -14,9 +14,11 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # max_overflow: maximum number of connections to allow beyond the pool size
 engine = create_engine(
     DATABASE_URL,
-    pool_size= 10,
-    max_overflow= 10,
-    echo= True
+    pool_size=10,
+    max_overflow=10,
+    pool_pre_ping=True,  # drop dead Neon connections before use
+    pool_recycle=300,    # recycle before Neon idle timeout
+    echo=True,
 )
 
 # create session

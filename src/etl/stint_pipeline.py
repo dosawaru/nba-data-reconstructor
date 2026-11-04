@@ -1,9 +1,12 @@
 import logging
+import time
+from pathlib import Path
 from typing import List, Optional
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from config.database import SessionLocal
+from config.database import SessionLocal, engine
 from src.etl.boxscore import BoxscoreIngestor
 from src.etl.query_events import PBPEventQuery
 from src.etl.season import game_id_to_season
@@ -14,6 +17,11 @@ from src.parser.state_reconstructor import DeterministicStateReconstructor
 from src.parser.stint_aggregator import StintAggregator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Resume after last successfully stinted game (currently through 602).
+RESUME_FROM = 603
+SLEEP_BETWEEN_GAMES_SEC = 4.0
+MISSED_GAMES_PATH = Path("data/processed/missed_stint_games.txt")
 
 
 class NBAStintPipeline:
@@ -68,39 +76,72 @@ class NBAStintPipeline:
                 )
             )
 
-        db: Session = SessionLocal()
-        try:
-            deleted = (
-                db.query(PbpStint)
-                .filter(PbpStint.game_id == game_id)
-                .delete(synchronize_session=False)
-            )
-            if deleted:
-                logging.info(f"Removed {deleted} existing stint rows for game {game_id}")
+        last_error: Exception | None = None
+        for attempt in range(2):
+            db: Session = SessionLocal()
+            try:
+                deleted = (
+                    db.query(PbpStint)
+                    .filter(PbpStint.game_id == game_id)
+                    .delete(synchronize_session=False)
+                )
+                if deleted:
+                    logging.info(f"Removed {deleted} existing stint rows for game {game_id}")
 
-            db.bulk_save_objects([PbpStint(**row) for row in team_rows])
-            db.commit()
-            logging.info(f"Loaded {len(team_rows)} stint rows for game {game_id} ({season})")
-            return len(team_rows)
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+                db.bulk_save_objects([PbpStint(**row) for row in team_rows])
+                db.commit()
+                logging.info(f"Loaded {len(team_rows)} stint rows for game {game_id} ({season})")
+                return len(team_rows)
+            except OperationalError as e:
+                last_error = e
+                logging.warning(f"Neon write failed for {game_id}; disposing pool and retrying")
+                db.rollback()
+                engine.dispose()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
 
-    def process_season(self, season: str) -> int:
+        raise last_error  # type: ignore[misc]
+
+    def process_season(self, season: str, resume_from: int = RESUME_FROM) -> int:
         game_ids = self.list_game_ids(season=season)
         if not game_ids:
             logging.warning(f"No games in database for season {season}")
             return 0
 
+        if resume_from > 1:
+            game_ids = [gid for gid in game_ids if int(gid[-5:]) >= resume_from]
+            logging.info(f"Resuming from game #{resume_from}: {len(game_ids)} games remaining")
+
         total = 0
+        missed: List[str] = []
         for game_id in game_ids:
-            total += self.process_game(game_id)
-        logging.info(f"Season {season}: wrote {total} stint rows across {len(game_ids)} games")
+            try:
+                total += self.process_game(game_id)
+            except Exception as e:
+                logging.warning(f"Skipping {game_id}: {e}")
+                missed.append(game_id)
+            time.sleep(SLEEP_BETWEEN_GAMES_SEC)
+
+        if missed:
+            MISSED_GAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with MISSED_GAMES_PATH.open("a", encoding="utf-8") as f:
+                for gid in missed:
+                    f.write(f"{gid}\n")
+            logging.warning(
+                f"Missed {len(missed)} games (appended to {MISSED_GAMES_PATH}): {missed}"
+            )
+
+        logging.info(
+            f"Season {season}: wrote {total} stint rows across "
+            f"{len(game_ids) - len(missed)}/{len(game_ids)} games "
+            f"({len(missed)} missed)"
+        )
         return total
 
 
 if __name__ == "__main__":
     pipeline = NBAStintPipeline()
-    pipeline.process_season("2024-25")
+    pipeline.process_season("2025-26")

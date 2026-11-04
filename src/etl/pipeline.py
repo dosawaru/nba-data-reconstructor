@@ -61,5 +61,12 @@ class NBAPlayByPlayPipeline:
             db.close()
 
 if __name__ == "__main__":
+    # Ingest 2025-26 regular-season games (00225xxxxx). Edit range as needed.
+    START, END = 1, 1230   
     orchestrator = NBAPlayByPlayPipeline()
-    orchestrator.process_game("0022400002") # Test execution on the 2024-2025 season opener
+    for n in range(START, END + 1):
+        game_id = f"00225{n:05d}"
+        try:
+            orchestrator.process_game(game_id)
+        except Exception as e:
+            logging.warning(f"Skipping {game_id}: {e}")
