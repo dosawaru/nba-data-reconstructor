@@ -132,7 +132,49 @@ class StintFeatureExtractor:
         X = stints_df[feature_columns].to_numpy(dtype=np.float64)
         y = stints_df["net_rating"].to_numpy(dtype=np.float64)
 
-        return X, y, stints_df[feature_columns + ["net_rating", "stint_id", "game_id"]]
+        return X, y, stints_df[feature_columns + ["net_rating", "stint_id", "game_id", "lineup_player_ids", "possessions", "points_scored", "points_allowed"]]
+
+    def build_lineup_summary(self, season: str) -> pd.DataFrame:
+        """Aggregate stints to lineup-level rows for production priors export."""
+        _, _, stints_df = self.extract_features(season)
+
+        stints_df = stints_df.copy()
+        stints_df["lineup_player_ids"] = stints_df["lineup_player_ids"].apply(
+            lambda ids: str(sorted(ids))
+        )
+
+        grouped = (
+            stints_df.groupby("lineup_player_ids", as_index=False)
+            .agg(
+                total_possessions=("possessions", "sum"),
+                points_scored=("points_scored", "sum"),
+                points_allowed=("points_allowed", "sum"),
+                drtg_opp=("drtg_opp", "mean"),
+                pace_factor=("pace_factor", "mean"),
+                delta_usg_on_off=("delta_usg_on_off", "mean"),
+            )
+        )
+        safe_poss = grouped["total_possessions"].clip(lower=1.0)
+        grouped["net_rating"] = (
+            (grouped["points_scored"] - grouped["points_allowed"]) / safe_poss
+        ) * 100.0
+        return grouped[
+            [
+                "lineup_player_ids",
+                "total_possessions",
+                "net_rating",
+                "drtg_opp",
+                "pace_factor",
+                "delta_usg_on_off",
+            ]
+        ]
+
+    def export_reconstructed_states(self, season: str, output_path: Path) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = self.build_lineup_summary(season)
+        summary.to_csv(output_path, index=False)
+        logger.info(f"Exported {len(summary)} lineup states to {output_path}")
+        return output_path
 
     def export_features(self, X: np.array, y: np.ndarray, output_dir:Path, season: str) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -145,10 +187,14 @@ class StintFeatureExtractor:
 
 if __name__ == "__main__":
     DB_URL = os.getenv("DATABASE_URL")
-    TARGET_SEASON = "2024-25"
+    TARGET_SEASON = "2025-26"
     ARTIFACT_DIR = Path("data/processed")
 
     extractor = StintFeatureExtractor(db_url=DB_URL)
     X_train, y_train, stint_df = extractor.extract_features(TARGET_SEASON)
     extractor.export_features(X_train, y_train, ARTIFACT_DIR, TARGET_SEASON)
+    extractor.export_reconstructed_states(
+        TARGET_SEASON,
+        ARTIFACT_DIR / "season_2025_2026_reconstructed_states.csv",
+    )
 
