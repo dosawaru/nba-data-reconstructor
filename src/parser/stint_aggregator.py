@@ -30,6 +30,7 @@ class StintAccumulator:
     start_seconds: float
     end_clock: str = ""
     end_seconds: float = 0.0
+    start_score_margin: Optional[float] = None  # signed home margin at first known score
 
     # home team stats
     home_pts: int = 0
@@ -86,6 +87,7 @@ class StintAccumulator:
             "duration": round(duration, 2),
             "home_lineup": list(self.home_lineup),
             "away_lineup": list(self.away_lineup),
+            "start_score_margin": float(self.start_score_margin or 0.0),
             "home_possessions": round(home_possessions),
             "away_possessions": round(away_possessions),
             "home_pts": self.home_pts,
@@ -196,10 +198,27 @@ class StintAggregator:
         logging.info(f"Aggregated {len(stints)} stints for game {game_id}")
         return stints
 
+    @staticmethod
+    def _parse_score_margin(raw: Any) -> Optional[float]:
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text or text.upper() == "TIE":
+            return 0.0
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
     def _accumulate_event(self, acc: StintAccumulator, event: Dict[str, Any]):
         """Categorizes and accumulates stats based on event type"""
 
         acc.events.append(event)
+        if acc.start_score_margin is None:
+            parsed = self._parse_score_margin(event.get("scoremargin"))
+            if parsed is not None:
+                acc.start_score_margin = parsed
+
         msg_type = int(event.get("eventmsgtype") or event.get("event_type") or 0)
         player_id = event.get("player1_id") or event.get("player_id")
         side, desc = self._action_side(event, acc)

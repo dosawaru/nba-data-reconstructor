@@ -18,7 +18,7 @@ engine = create_engine(
     max_overflow=10,
     pool_pre_ping=True,  # drop dead Neon connections before use
     pool_recycle=300,    # recycle before Neon idle timeout
-    echo=True,
+    echo=False,
 )
 
 # create session

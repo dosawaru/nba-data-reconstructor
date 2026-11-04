@@ -35,6 +35,9 @@ def main():
         "drtg_opp",
         "pace_factor",
         "delta_usg_on_off",
+        "ortg_lineup",
+        "net_lineup",
+        "is_home",
     ]
     
     # Ensure all required columns exist before matrix operations
