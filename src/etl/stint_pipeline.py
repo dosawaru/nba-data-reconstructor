@@ -18,8 +18,8 @@ from src.parser.stint_aggregator import StintAggregator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Resume after last successfully stinted game (currently through 602).
-RESUME_FROM = 603
+# Default entrypoint retries missed games; process_season uses these when invoked.
+RESUME_FROM = 1
 SLEEP_BETWEEN_GAMES_SEC = 4.0
 MISSED_GAMES_PATH = Path("data/processed/missed_stint_games.txt")
 
@@ -141,7 +141,37 @@ class NBAStintPipeline:
         )
         return total
 
+    def process_missed(self, path: Path = MISSED_GAMES_PATH) -> int:
+        if not path.exists():
+            logging.warning(f"No missed-games file at {path}")
+            return 0
+
+        game_ids = sorted({line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()})
+        if not game_ids:
+            logging.info("Missed-games file is empty")
+            return 0
+
+        logging.info(f"Retrying {len(game_ids)} missed games from {path}")
+        total = 0
+        still_missed: List[str] = []
+        for game_id in game_ids:
+            try:
+                total += self.process_game(game_id)
+            except Exception as e:
+                logging.warning(f"Still missing {game_id}: {e}")
+                still_missed.append(game_id)
+            time.sleep(SLEEP_BETWEEN_GAMES_SEC)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{gid}\n" for gid in still_missed), encoding="utf-8")
+        logging.info(
+            f"Missed retry: wrote {total} stint rows; "
+            f"{len(game_ids) - len(still_missed)} recovered, {len(still_missed)} still missing "
+            f"(rewrote {path})"
+        )
+        return total
+
 
 if __name__ == "__main__":
     pipeline = NBAStintPipeline()
-    pipeline.process_season("2025-26")
+    pipeline.process_missed()

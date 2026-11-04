@@ -12,6 +12,8 @@ from sqlalchemy.engine import Engine
 from dotenv import load_dotenv
 import os
 
+from src.models.lineup_keys import canonical_lineup_key
+
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
@@ -30,19 +32,7 @@ class EvaluationReport:
     root_mean_square_error: float
     within_3_points_pct: float
     within_5_points_pct: float
-
-def _lineup_key(ids) -> str:
-    """Canonical sorted key shared by CSV export, priors, and DB JSONB lists."""
-    if isinstance(ids, str):
-        cleaned = ids.strip().strip("[]")
-        if not cleaned:
-            return ""
-        parts = [int(x.strip()) for x in cleaned.split(",") if x.strip()]
-        return ",".join(str(x) for x in sorted(parts))
-    try:
-        return ",".join(str(int(x)) for x in sorted(ids))
-    except TypeError:
-        return str(ids)
+    prior_hit_rate_pct: float
 
 class PredictiveEvaluator:
     """Simulates a walk-forward evaluation using true possession-weighted stint aggregations."""
@@ -55,12 +45,20 @@ class PredictiveEvaluator:
         raw_priors: List[Dict] = joblib.load(priors_path)
 
         self.priors_map: Dict[str, float] = {
-            _lineup_key(item["lineup_player_ids"]): float(item["shrinkage_posterior_net_rating"]) 
+            canonical_lineup_key(item["lineup_player_ids"]): float(item["shrinkage_posterior_net_rating"])
             for item in raw_priors
         }
+        self.default_prior: float = (
+            float(np.mean(list(self.priors_map.values()))) if self.priors_map else 0.0
+        )
 
         self.db_engine: Engine = create_engine(db_uri)
         self.config: EvaluationConfig = config or EvaluationConfig()
+
+    def _lookup_prior(self, key: str) -> tuple[float, bool]:
+        if key in self.priors_map:
+            return self.priors_map[key], True
+        return self.default_prior, False
 
     def load_stint_level_game_logs(self, test_season: str) -> pd.DataFrame:
         """
@@ -88,7 +86,9 @@ class PredictiveEvaluator:
 
         projected_margin_list: List[float] = []
         actual_margin_list: List[float] = []
-        
+        prior_hits = 0
+        prior_lookups = 0
+
         # Group by game to aggregate exact expected margins across all rotational shifts
         grouped_games = stints_df.groupby("game_id")
         logger.info(f"Running mathematical evaluation across {len(grouped_games)} reconstructed games...")
@@ -99,19 +99,21 @@ class PredictiveEvaluator:
             total_game_possessions = 0.0
 
             for _, row in game_stints.iterrows():
-                home_key = _lineup_key(row['home_lineup'])
-                away_key = _lineup_key(row['away_lineup'])
-                
-                # Fetch regularized priors
-                home_prior = self.priors_map.get(home_key, 0.0)
-                away_prior = self.priors_map.get(away_key, 0.0)
-                stint_poss = float(row['possessions'])
+                home_key = canonical_lineup_key(row["home_lineup"])
+                away_key = canonical_lineup_key(row["away_lineup"])
+
+                home_prior, home_hit = self._lookup_prior(home_key)
+                away_prior, away_hit = self._lookup_prior(away_key)
+                prior_lookups += 2
+                prior_hits += int(home_hit) + int(away_hit)
+
+                stint_poss = float(row["possessions"])
 
                 # Expected margin for THIS SPECIFIC STINT
                 expected_stint_margin = (home_prior - away_prior) * (stint_poss / 100.0)
-                
+
                 game_proj_margin += expected_stint_margin
-                game_actual_margin += float(row['points_scored'] - row['points_allowed'])
+                game_actual_margin += float(row["points_scored"] - row["points_allowed"])
                 total_game_possessions += stint_poss
 
             # Apply Home Court Advantage across the total aggregated pace of the game
@@ -131,13 +133,15 @@ class PredictiveEvaluator:
 
         within_3 = float(np.mean(errors <= 3.0)) * 100
         within_5 = float(np.mean(errors <= 5.0)) * 100
+        hit_rate = (prior_hits / prior_lookups * 100.0) if prior_lookups else 0.0
 
         return EvaluationReport(
             total_games_evaluated=len(grouped_games),
             mean_absolute_error=round(mae, 2),
             root_mean_square_error=round(rmse, 2),
             within_3_points_pct=round(within_3, 2),
-            within_5_points_pct=round(within_5, 2)
+            within_5_points_pct=round(within_5, 2),
+            prior_hit_rate_pct=round(hit_rate, 2),
         )
 
 if __name__ == "__main__":
@@ -149,8 +153,9 @@ if __name__ == "__main__":
 
     evaluator = PredictiveEvaluator(priors_path=PRIORS_FILE, db_uri=DB_URL)
     logger.info(
-        "Loaded %d lineup priors. Running predictive evaluation.",
+        "Loaded %d lineup priors (default_prior=%.3f). Running predictive evaluation.",
         len(evaluator.priors_map),
+        evaluator.default_prior,
     )
 
     report = evaluator.run_evaluation(test_season=HOLDOUT_SEASON)
@@ -163,4 +168,5 @@ if __name__ == "__main__":
     print(f"Root Mean Square (RMSE):    {report.root_mean_square_error} points")
     print(f"Accuracy (Within 3 pts):    {report.within_3_points_pct}%")
     print(f"Accuracy (Within 5 pts):    {report.within_5_points_pct}%")
+    print(f"Prior Hit Rate:             {report.prior_hit_rate_pct}%")
     print("=" * 50 + "\n")

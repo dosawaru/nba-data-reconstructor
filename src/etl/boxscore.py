@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 from typing import List, Dict, Tuple, Any
 
-from nba_api.stats.endpoints import boxscoretraditionalv3, boxscoresummaryv2
+from nba_api.stats.endpoints import boxscoretraditionalv3, boxscoresummaryv3
 from nba_api.stats.static import teams
 from requests.exceptions import ReadTimeout, ConnectionError, ChunkedEncodingError
 
@@ -13,7 +13,16 @@ from requests.exceptions import ReadTimeout, ConnectionError, ChunkedEncodingErr
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 CACHE_DIR = Path("data/cache/boxscore")
-RETRYABLE = (ReadTimeout, ConnectionError, ChunkedEncodingError, ValueError, OSError)
+RETRYABLE = (
+    ReadTimeout,
+    ConnectionError,
+    ChunkedEncodingError,
+    ValueError,
+    OSError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
 
 
 class BoxscoreIngestor:
@@ -88,6 +97,24 @@ class BoxscoreIngestor:
                 raise
         raise RuntimeError(f"Failed to fetch starting lineup for game {game_id} after {max_retries} retries")
 
+    def _game_info_from_traditional(self, game_id: str) -> Dict:
+        box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id, timeout=60)
+        data = box.get_dict() or {}
+        bst = data.get("boxScoreTraditional") or {}
+        home_team = bst.get("homeTeam") or {}
+        away_team = bst.get("awayTeam") or {}
+        home_id = int(home_team["teamId"])
+        away_id = int(away_team["teamId"])
+        home = teams.find_team_name_by_id(home_id) or {}
+        away = teams.find_team_name_by_id(away_id) or {}
+        return {
+            "game_date": "",
+            "home_team": home.get("full_name", str(home_id)),
+            "away_team": away.get("full_name", str(away_id)),
+            "home_team_id": home_id,
+            "away_team_id": away_id,
+        }
+
     def get_game_info(self, game_id: str, max_retries: int = 3) -> Dict:
         cached = self._load_cache("info", game_id)
         if cached is not None:
@@ -97,11 +124,15 @@ class BoxscoreIngestor:
         while retries < max_retries:
             logging.info(f"Fetching game info for game {game_id}")
             try:
-                summary = boxscoresummaryv2.BoxScoreSummaryV2(game_id=game_id, timeout=60)
-                game = summary.game_summary.get_data_frame().iloc[0]
-                home_id = int(game["HOME_TEAM_ID"])
-                away_id = int(game["VISITOR_TEAM_ID"])
-                raw_date = str(game["GAME_DATE_EST"])
+                # Use V3 since it's more reliable than V2 for post-2025 games
+                summary = boxscoresummaryv3.BoxScoreSummaryV3(game_id=game_id, timeout=60)
+                payload = summary.get_dict() or {}
+                game = payload.get("boxScoreSummary") or {}
+                if not game.get("homeTeamId"):
+                    raise ValueError("boxScoreSummary missing team ids")
+                home_id = int(game["homeTeamId"])
+                away_id = int(game["awayTeamId"])
+                raw_date = str(game.get("gameEt") or game.get("gameTimeUTC") or "")
                 game_date = raw_date.split("T")[0] if "T" in raw_date else raw_date[:10]
 
                 home = teams.find_team_name_by_id(home_id) or {}
@@ -117,11 +148,18 @@ class BoxscoreIngestor:
                 self._save_cache("info", game_id, info)
                 return info
             except RETRYABLE as e:
-                wait_time = (3 ** retries) + random.uniform(2.0, 5.0)
                 logging.error(f"Error fetching game info for game {game_id}: {e}")
-                logging.info(f"Backing off {wait_time:.1f}s before retry {retries + 1}/{max_retries}")
-                time.sleep(wait_time)
-                retries += 1
+                try:
+                    info = self._game_info_from_traditional(game_id)
+                    self._save_cache("info", game_id, info)
+                    logging.info(f"Recovered game info via traditional boxscore for {game_id}")
+                    return info
+                except Exception as fallback_err:
+                    wait_time = (3 ** retries) + random.uniform(2.0, 5.0)
+                    logging.error(f"Traditional fallback failed for {game_id}: {fallback_err}")
+                    logging.info(f"Backing off {wait_time:.1f}s before retry {retries + 1}/{max_retries}")
+                    time.sleep(wait_time)
+                    retries += 1
             except Exception as e:
                 logging.error(f"Unexpected error fetching game info for game {game_id}: {e}")
                 raise

@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 from src.etl.boxscore import BoxscoreIngestor
 from src.etl.playername import PlayerNameResolver
-from src.models.backtest import PredictiveEvaluator, _lineup_key
+from src.models.backtest import PredictiveEvaluator
+from src.models.lineup_keys import canonical_lineup_key as _lineup_key
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
